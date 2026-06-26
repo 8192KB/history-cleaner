@@ -1,6 +1,6 @@
-# dcinside-cleaner
+# community-history-cleaner
 
-디시인사이드 게시글/댓글 일괄 삭제 도구
+게시글/댓글 일괄 삭제 도구
 
 ## 기능
 - Playwright 기반 로그인 (JS 보안, 리다이렉트 우회)
