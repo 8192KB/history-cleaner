@@ -1,6 +1,6 @@
 # dcinside-cleaner
 
-디시인사이드 게시글/댓글 일괄 삭제 도구.
+디시인사이드 게시글/댓글 일괄 삭제 도구
 
 ## 기능
 - Playwright 기반 로그인 (JS 보안, 리다이렉트 우회)
@@ -12,11 +12,10 @@
 
 ```bash
 pip install -r requirements.txt
-pip install playwright ddddocr
 playwright install chromium
 ```
 
-리눅스 서버의 경우 `playwright install-deps`로 시스템 의존성 설치.
+리눅스 서버라면 `playwright install-deps`로 시스템 의존성도 설치
 
 ## 실행
 
@@ -25,4 +24,4 @@ python3 main.py
 ```
 
 ## Credit
-[dlcjsdltlq/dcinside-cleaner (v1.2)](https://github.com/dlcjsdltlq/dcinside-cleaner) 기반. Playwright 로그인 및 로컬 캡차 인식 기능을 추가한 포크.
+[dlcjsdltlq/dcinside-cleaner (v1.2)](https://github.com/dlcjsdltlq/dcinside-cleaner) 기반으로 Playwright 로그인, 로컬 캡차 인식 기능을 추가한 포크
