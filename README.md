@@ -1,11 +1,11 @@
-# community-history-cleaner
+# history-cleaner
 
 게시글/댓글 일괄 삭제 도구
 
 ## 기능
 - Playwright 기반 로그인 (JS 보안, 리다이렉트 우회)
-- ddddocr 로컬 캡차 자동 인식으로 로그인 처리 (외부 API 불필요)
-- 2captcha로 삭제 시 Google reCAPTCHA 우회
+- ddddocr 로그인 캡차 로컬 처리
+- 2captcha (삭제 시)
 - 쿠키 자동 저장 (재로그인 생략)
 
 ## 설치
