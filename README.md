@@ -24,4 +24,5 @@ python3 main.py
 ```
 
 ## Credit
-[dlcjsdltlq/dcinside-cleaner (v1.2)](https://github.com/dlcjsdltlq/dcinside-cleaner) 기반 포크
+[dlcjsdltlq/dcinside-cleaner (v1.2)](https://github.com/dlcjsdltlq/dcinside-cleaner)에서
+갈라져 나온 프로젝트입니다. 원본 저작자에게 감사드립니다.
