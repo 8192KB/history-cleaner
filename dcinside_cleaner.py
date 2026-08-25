@@ -33,7 +33,7 @@ DAEWANGCON_COMMENTS = 20
 # 여기를 넉넉히 잡을 이유는 없다 (dccleaner는 글 쪽을 105초로 잡는다)
 DAEWANGCON_POST_INTERVAL = 5.0
 DAEWANGCON_POST_BATCH = 5
-DAEWANGCON_POST_BATCH_WAIT = 30.0
+DAEWANGCON_POST_BATCH_WAIT = 105.0
 DAEWANGCON_COMMENT_INTERVAL = 3.0
 DAEWANGCON_COMMENT_BATCH = 10
 DAEWANGCON_COMMENT_BATCH_WAIT = 90.0
@@ -771,7 +771,7 @@ class Cleaner:
         except OSError:
             pass
 
-    def solveCaptchaAuto(self, tries: int = 40, notify=None) -> dict:
+    def solveCaptchaAuto(self, tries: int = 120, notify=None) -> dict:
         """모바일 갤로그 봇체크를 ddddocr로 풀어 본다
 
         이 캡차는 한글이 섞여 나오는데 ddddocr charset엔 한글이 없다시피 해서

@@ -329,7 +329,7 @@ class MobileGallog:
             return {'ok': False, 'cause': str(payload.get('cause') or '코드가 틀렸습니다.')}
         return {'ok': True, 'cause': ''}
 
-    def solveCaptcha(self, user_id: str, ocr, tries: int = 40,
+    def solveCaptcha(self, user_id: str, ocr, tries: int = 120,
                      interval: float = 0.4, notify=None, dump=None) -> dict:
         """봇체크 캡차를 자동으로 푼다
 
