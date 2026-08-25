@@ -140,7 +140,7 @@ class Console:
         return reason or '알 수 없는 사유'
 
     def waitAndRetry(self, fetch, tries=5):
-        """속도 제한에 걸리면 기다렸다가 다시 시도한다
+        """갤로그 응답을 받지 못하면 기다렸다가 다시 시도한다
 
         30초 간격으로 재 보면 빈 응답은 대개 단발이고 다음 번엔 통과한다
         반대로 몇 초 간격으로 몰아치면 수 분짜리 차단으로 굳는다
@@ -148,7 +148,9 @@ class Console:
         """
         for i in range(tries):
             wait = min(30 * (i + 1), 120)
-            print(f'속도 제한 상태입니다. {wait}초 기다렸다가 재시도합니다... ({i + 1}/{tries}, 취소: Ctrl+C)')
+            print(
+                f'갤로그 응답 재시도: {wait}초 대기 '
+                f'({i + 1}/{tries}, 취소: Ctrl+C)')
             try:
                 time.sleep(wait)
             except KeyboardInterrupt:
@@ -402,11 +404,11 @@ class Console:
             g_list = self.cleaner.getGallList(post_type)
 
             if g_list == 'BLOCKED':
-                print('갤로그가 빈 응답을 돌려주고 있습니다. (요청 속도 제한)')
+                print('갤로그 목록 응답 없음')
                 g_list = self.waitAndRetry(lambda: self.cleaner.getGallList(post_type))
 
             if g_list == 'BLOCKED':
-                print('계속 빈 응답입니다. 로그인은 유지되니 나중에 다시 시도하거나 "proxy load"를 사용해 주세요.')
+                print('갤로그 목록 응답 없음: 나중에 재시도 또는 "proxy load" 사용')
                 return 0
             if not g_list:
                 print('갤러리 리스트가 없습니다.')
@@ -650,27 +652,35 @@ class Console:
         print(f'{type_kor} 목록 가져오는 중... (취소: Ctrl+C)')
         try:
             pbar = None
-            blocked_on_first = False
+            list_unavailable = False
             for i in self.cleaner.aggregatePosts(gno, post_type):
+                if not i['status'] and i['data'] == 'list_fallback':
+                    print(
+                        f"* 목록 경로 전환: {i.get('from')} → {i.get('to')}")
+                    continue
                 if not i['status'] and i['data'] == 'filter_unavailable':
-                    print('* 목록 경로 전환: mobile web → desktop web')
                     print('* 필터 미지원: desktop 목록에 작성일·본문 없음. 조건 없이 진행')
                     continue
                 if not i['status'] and i['data'] == 'ipblocked':
-                    if pbar is None:
-                        # 첫 요청부터 차단. 다시 시도한다
-                        blocked_on_first = True
-                        break
-                    print('IP 차단 감지')
-                    pbar.close()
-                    return
+                    # 첫 페이지뿐 아니라 중간 페이지 실패도 partial 목록을
+                    # 사용하지 않고 전체 수집을 다시 시도한다
+                    list_unavailable = True
+                    break
                 if pbar is None:
                     # 첫 이벤트가 성공이면 진행률 표시를 시작한다
-                    pbar = tqdm(total=None)
+                    # 페이지 하나를 즉시 처리하면 수만 it/s가 찍혀 의미가 없다
+                    pbar = tqdm(
+                        total=None,
+                        unit='page',
+                        delay=0.1,
+                        bar_format='{n_fmt} {unit} [{elapsed}]')
                 pbar.update(1)
 
-            if blocked_on_first:
-                print('갤로그 응답 없음: 요청 속도 제한')
+            if list_unavailable:
+                if pbar is not None:
+                    pbar.close()
+                    pbar = None
+                print('갤로그 목록 응답 없음')
                 result = self.waitAndRetry(lambda: self._retryAggregate(gno, post_type))
                 if result == 'BLOCKED':
                     print('갤로그 응답 없음: 나중에 재시도 또는 "proxy load" 사용')
@@ -694,8 +704,28 @@ class Console:
         failed = 0
         requeued = 0
         deferred = 0
+        route_success = {
+            '앱 API': 0,
+            'mobile': 0,
+            'desktop': 0,
+        }
+        route_labels = {
+            'app API': '앱 API',
+            'app API 재시도': '앱 API 재시도',
+            'mobile web': 'mobile',
+            'desktop web': 'desktop',
+        }
         try:
-            with tqdm(total=total) as pbar:
+            # tqdm 기본값은 1초/건을 경계로 it/s와 s/it를 바꾼다
+            # 삭제 중 단위가 뒤집히지 않도록 항상 it/s로 표시한다
+            delete_bar_format = (
+                '{desc}: {percentage:3.0f}%|{bar}| '
+                '{n_fmt}/{total_fmt} '
+                '[{elapsed}<{remaining}, {rate_noinv_fmt}]')
+            with tqdm(
+                    total=total,
+                    desc=f'{type_kor} 삭제 [준비]',
+                    bar_format=delete_bar_format) as pbar:
                 generator = self.cleaner.deletePosts(post_type)
                 while True:
                     try:
@@ -717,24 +747,27 @@ class Console:
                                 continue
                             if i['data'] == 'delete_route':
                                 route_steps = i.get('steps', [])
-                                for index, step in enumerate(route_steps):
-                                    if step.get('skipped'):
-                                        text = (
-                                            f"{step.get('route')} 건너뜀: "
-                                            f"{step.get('reason')}")
-                                    elif step.get('ok'):
-                                        text = f"{step.get('route')} 성공"
-                                    else:
-                                        text = (
-                                            f"{step.get('route')} 실패: "
-                                            f"{step.get('reason')}")
-                                    if step.get('elapsed') is not None:
-                                        text += f" ({step['elapsed']:.1f}초)"
-                                    if index + 1 < len(route_steps):
-                                        text += f" → {route_steps[index + 1].get('route')}"
-                                    elif i.get('deferred'):
-                                        text += ' → 웹 대기'
-                                    tqdm.write(f"[{i.get('del_no')}] {text}")
+                                attempted = [
+                                    step for step in route_steps
+                                    if not step.get('skipped')]
+                                if attempted:
+                                    route = attempted[-1].get('route')
+                                    label = route_labels.get(route, route)
+                                    pbar.set_description(
+                                        f'{type_kor} 삭제 [{label}]')
+                                for step in attempted:
+                                    if not step.get('ok'):
+                                        continue
+                                    route = step.get('route')
+                                    label = route_labels.get(route, route)
+                                    if label == '앱 API 재시도':
+                                        label = '앱 API'
+                                    if label in route_success:
+                                        route_success[label] += 1
+                                continue
+                            if i['data'] == 'app_retry_queued':
+                                pbar.set_description(
+                                    f'{type_kor} 삭제 [앱 API 재시도 대기]')
                                 continue
                             if i['data'] == 'deferred':
                                 # 웹 처리 단계로 미뤄뒀다. 아직 안 끝났으므로
@@ -742,10 +775,8 @@ class Console:
                                 deferred = i['count']
                                 continue
                             if i['data'] == 'drain_start':
-                                tqdm.write(
-                                    f"앱 API로 지울 수 있는 건 다 지웠습니다. "
-                                    f"웹 삭제 대기: {i['count']}건 "
-                                    f"({i['delay']:.0f}초 간격, 봇체크 가능)")
+                                pbar.set_description(
+                                    f'{type_kor} 삭제 [mobile]')
                                 deferred = 0
                                 continue
                             if i['data'] == 'captcha_solving':
@@ -796,11 +827,17 @@ class Console:
         if requeued:
             print(f'\n재시도: {requeued}회')
 
+        route_summary = ' / '.join(
+            f'{route} {count}'
+            for route, count in route_success.items()
+            if count)
+        route_suffix = f' ({route_summary})' if route_summary else ''
+
         # 실패만 잔뜩 났는데 "완료"라고 하면 지워진 줄 안다
         if deleted and failed:
-            print(f'\n삭제 완료: {deleted}건 / 실패: {failed}건')
+            print(f'\n삭제 완료: {deleted}건 / 실패: {failed}건{route_suffix}')
         elif deleted:
-            print(f'\n삭제 완료: {deleted}건')
+            print(f'\n삭제 완료: {deleted}건{route_suffix}')
         elif failed:
             print(f'\n삭제 실패: {failed}건 / 삭제: 0건')
         else:

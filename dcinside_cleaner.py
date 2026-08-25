@@ -569,15 +569,24 @@ class Cleaner:
         # 이미 앱 API가 거절해서 미뤄둔 건은 다시 물어볼 필요가 없다
         if (not solve_captcha and not entry.get('_gallog_only')
                 and self.isAppApiReady() and self._canUseAppApi(entry, post_type)):
+            app_route = (
+                'app API 재시도'
+                if entry.get('_app_retry_attempted') else 'app API')
             result = self._deleteViaAppApi(entry, post_type)
             self._recordDeleteRoute(
-                entry, 'app API', result,
+                entry, app_route, result,
                 self.last_app_api_error or '사용 불가',
                 time.time() - app_route_started)
 
             # 삭제 성공
             if isinstance(result, dict) and not result:
                 return result
+
+            # 앱 API가 막힌 경우에는 웹 경로로 넘기기 전에 갤로그 봇체크를
+            # 확인해야 한다. 상위 삭제 루프가 캡차를 풀고 같은 앱 API 요청을
+            # 다시 시도할 수 있도록 일반 BLOCKED와 구분한다
+            if result == 'BLOCKED':
+                return 'APP_BLOCKED'
 
             # result가 None이면 앱 API를 쓸 수 없다는 뜻이다
             # 성공(빈 dict)과 헷갈려 그대로 돌려주면 지우지도 않은 항목이
@@ -590,6 +599,11 @@ class Cleaner:
             # 다만 지금 웹 요청을 섞지는 않는다. 앱 대상 전체를 먼저 처리하고
             # 실패한 항목만 모아 mobile -> desktop 순으로 시도한다
             if not allow_gallog and entry.get('log_no'):
+                # 항목별 실패는 나머지 앱 대상을 먼저 처리한 뒤 한 번만 더
+                # 확인한다. BLOCKED는 위에서 캡차 확인 경로로 이미 빠진다
+                if (isinstance(result, dict) and result
+                        and not entry.get('_app_retry_attempted')):
+                    return 'APP_RETRY'
                 return 'DEFER'
 
             # allow_gallog=True인 단계라면 아래의 모바일 -> 데스크톱 순서로
@@ -625,9 +639,11 @@ class Cleaner:
                 time.time() - route_started)
             if isinstance(result, dict) and not result:
                 return result
-            # 모바일의 속도 제한·봇체크·항목별 실패를 포함해 삭제가 안 됐으면
-            # 데스크톱을 마지막 경로로 시도한다. 모바일 신호를 바로 반환하면
-            # 상위 재시도 루프가 같은 모바일 경로에만 계속 머문다
+            # 봇체크는 기다리거나 다른 경로로 우회할 문제가 아니다. 명시적인
+            # 캡차 신호를 desktop 결과로 덮으면 상위에서 차단으로 오판한다
+            if result == 'CAPTCHA':
+                return result
+            # 그 밖의 실패는 desktop을 마지막 경로로 시도한다
 
         # 3) desktop web. 앞선 경로가 무엇 때문에 실패했든 마지막으로 시도한다
         route_started = time.time()
@@ -1076,6 +1092,16 @@ class Cleaner:
                                    allow_gallog=draining)
             delay = time.time() - a
 
+            app_captcha = False
+            if data == 'APP_BLOCKED':
+                # 앱 API의 빈 응답은 속도 제한과 봇체크를 구분할 수 없다
+                # 갤로그에 캡차가 실제로 붙었을 때만 풀고 앱 API를 재시도한다
+                app_captcha = bool(
+                    self.use_mobile and self.mobile.hasCaptcha(self.user_id))
+                if not app_captcha:
+                    # 캡차가 아니면 이 항목만 웹 처리 단계로 넘긴다
+                    data = 'DEFER'
+
             # deletePost 안에서 실제로 시도한 경로를 즉시 알린다. DEFER이면
             # 앱 실패만 먼저 표시되고, mobile/desktop 결과는 웹 처리 때 표시된다
             route_steps = self._takeDeleteRoute(entry)
@@ -1087,6 +1113,23 @@ class Cleaner:
                     'steps': route_steps,
                     'deferred': data == 'DEFER',
                 }
+
+            if app_captcha:
+                yield from self._resolveCaptcha()
+                continue
+
+            if data == 'APP_RETRY':
+                # 즉시 연속 호출하지 않고 목록 끝에서 한 번만 다시 확인한다
+                self.post_list.pop(0)
+                if isinstance(entry, dict):
+                    entry['_app_retry_attempted'] = True
+                self.post_list.append(entry)
+                yield {
+                    'status': False,
+                    'data': 'app_retry_queued',
+                    'del_no': post_no,
+                }
+                continue
 
             if data == 'DEFER':
                 # 앱 API에서 실패한 항목이다. 지금 웹 요청을 섞지 않고
@@ -1305,6 +1348,12 @@ class Cleaner:
             if result != 'FALLBACK':
                 yield from result
                 return
+            yield {
+                'status': False,
+                'data': 'list_fallback',
+                'from': 'mobile web',
+                'to': 'desktop web',
+            }
 
         yield from self._aggregateViaDesktop(gno, post_type)
 
@@ -1337,8 +1386,10 @@ class Cleaner:
             delay = time.time() - a
 
             if page_data is None:
-                events.append({'status': False, 'data': 'ipblocked'})
-                return events
+                # 일부 페이지만 가진 채 삭제를 시작하면 누락이 생긴다
+                # mobile 수집 전체를 버리고 desktop에서 처음부터 다시 받는다
+                self.post_list = []
+                return 'FALLBACK'
 
             self._appendFiltered(page_data['entries'], gno, post_type)
             events.append({'status': True, 'data': {'index': page, 'proxy': '', 'delay': round(delay, 1)}})
