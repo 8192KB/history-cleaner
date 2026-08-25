@@ -261,7 +261,7 @@ class Console:
         if self.login_flag and cmd[0].isdigit() and len(cmd) == 1:
             if self.g_list.get('type'):
                 type_kor = '글' if self.g_list['type'] == 'posting' else '댓글'
-                print(f'{cmd[0]}번 갤러리 {type_kor} 삭제를 시도합니다...')
+                print(f'{cmd[0]}번 갤러리 {type_kor} 삭제 시작...')
                 self.delete(self.g_list[int(cmd[0])], self.g_list['type'])
             else:
                 print('먼저 리스트를 불러와주세요. (p 또는 c)')
@@ -442,7 +442,7 @@ class Console:
             for del_no in del_list:
                 if del_no.isdigit() and int(del_no) in self.g_list:
                     type_kor = '글' if self.g_list['type'] == 'posting' else '댓글'
-                    print(f'{del_no}번 갤러리 {type_kor} 삭제를 시도합니다...')
+                    print(f'{del_no}번 갤러리 {type_kor} 삭제 시작...')
                     self.delete(self.g_list[int(del_no)], self.g_list['type'])
 
         elif cmd[0] == 'wang':
@@ -633,20 +633,19 @@ class Console:
 
         type_kor = '글' if post_type == 'posting' else '댓글'
 
-        # 앱 API로 보내면 갤로그 요청이 건당 2회에서 0회가 된다
-        # 모바일 목록이 댓글번호를 주므로 댓글도 같은 경로를 쓴다
-        # 비밀번호가 필요하고, 실패해도 갤로그 경로로 그대로 진행한다
+        # 앱 API 우선, 실패 항목은 mobile -> desktop 순으로 처리한다
+        # 비밀번호가 있을 때만 앱 API를 준비하며 실패해도 웹 삭제는 계속된다
         if not self.cleaner.isAppApiReady() and self.user_id and self.user_pw:
-            print('앱 API 준비 중... (실패해도 기존 방식으로 진행됩니다)')
+            print('앱 API 준비 중...')
             notify = lambda sec: print(
-                f'기기를 새로 등록했습니다. dcinside가 받아줄 때까지 {sec:.0f}초 기다립니다... (최초 1회만)')
+                f'새 기기 등록: {sec:.0f}초 대기 (최초 1회)')
             if self.cleaner.enableAppApi(self.user_id, self.user_pw, notify=notify):
-                print('앱 API 사용: 갤로그를 거치지 않고 삭제합니다.')
+                print('앱 API 사용: 갤로그를 거치지 않고 삭제')
             else:
                 error = self.cleaner.getLastAppApiError()
-                print(f'앱 API를 쓸 수 없어 갤로그로 삭제합니다. ({error})')
+                print(f'앱 API 준비 실패: 웹 삭제로 전환 ({error})')
                 if '자동 입력 방지' in error or '보안코드' in error:
-                    print('* 앱 로그인이 너무 잦아 캡차가 걸렸습니다. 잠시 후 다시 시도하면 풀립니다.')
+                    print('* 앱 로그인 캡차 감지: 잠시 후 재시도 가능')
 
         print(f'{type_kor} 목록 가져오는 중... (취소: Ctrl+C)')
         try:
@@ -654,15 +653,15 @@ class Console:
             blocked_on_first = False
             for i in self.cleaner.aggregatePosts(gno, post_type):
                 if not i['status'] and i['data'] == 'filter_unavailable':
-                    print('* 갤로그 목록이 모바일 응답을 안 줘서 데스크톱으로 받습니다.')
-                    print('* 데스크톱 목록엔 작성일·본문이 없어 조건을 걸 수 없습니다. 조건을 무시하고 진행합니다.')
+                    print('* 목록 경로 전환: mobile web → desktop web')
+                    print('* 필터 미지원: desktop 목록에 작성일·본문 없음. 조건 없이 진행')
                     continue
                 if not i['status'] and i['data'] == 'ipblocked':
                     if pbar is None:
                         # 첫 요청부터 차단. 다시 시도한다
                         blocked_on_first = True
                         break
-                    print('IP 차단이 감지되었습니다.')
+                    print('IP 차단 감지')
                     pbar.close()
                     return
                 if pbar is None:
@@ -671,22 +670,22 @@ class Console:
                 pbar.update(1)
 
             if blocked_on_first:
-                print('갤로그가 빈 응답을 돌려주고 있습니다. (요청 속도 제한)')
+                print('갤로그 응답 없음: 요청 속도 제한')
                 result = self.waitAndRetry(lambda: self._retryAggregate(gno, post_type))
                 if result == 'BLOCKED':
-                    print('계속 빈 응답입니다. 나중에 다시 시도하거나 "proxy load"를 사용해 주세요.')
+                    print('갤로그 응답 없음: 나중에 재시도 또는 "proxy load" 사용')
                     return
 
             if pbar is not None:
                 pbar.close()
             skipped = self.cleaner.skipped_by_filter
             if skipped:
-                print(f'조건에 걸려 {skipped}건은 남겨둡니다.')
+                print(f'필터 제외: {skipped}건')
             if not self.cleaner.post_list:
-                print('조건에 맞는 항목이 없습니다.' if skipped else '삭제할 항목이 없습니다.')
+                print('삭제 대상: 0건')
                 return
         except KeyboardInterrupt:
-            print('\n작업이 취소되었습니다.')
+            print('\n작업 취소')
             return
 
         print('삭제 중... (일시정지: Ctrl+C)')
@@ -714,40 +713,61 @@ class Console:
                                     f"({i['attempt']}/{i['max_attempts']}, 취소: Ctrl+C)")
                                 continue
                             if i['data'] == 'rate_cleared':
-                                tqdm.write('응답이 정상으로 돌아왔습니다.')
+                                tqdm.write('속도 제한 해제')
+                                continue
+                            if i['data'] == 'delete_route':
+                                route_steps = i.get('steps', [])
+                                for index, step in enumerate(route_steps):
+                                    if step.get('skipped'):
+                                        text = (
+                                            f"{step.get('route')} 건너뜀: "
+                                            f"{step.get('reason')}")
+                                    elif step.get('ok'):
+                                        text = f"{step.get('route')} 성공"
+                                    else:
+                                        text = (
+                                            f"{step.get('route')} 실패: "
+                                            f"{step.get('reason')}")
+                                    if step.get('elapsed') is not None:
+                                        text += f" ({step['elapsed']:.1f}초)"
+                                    if index + 1 < len(route_steps):
+                                        text += f" → {route_steps[index + 1].get('route')}"
+                                    elif i.get('deferred'):
+                                        text += ' → 웹 대기'
+                                    tqdm.write(f"[{i.get('del_no')}] {text}")
                                 continue
                             if i['data'] == 'deferred':
-                                # 갤로그 몫으로 미뤄뒀다. 아직 안 끝났으므로
+                                # 웹 처리 단계로 미뤄뒀다. 아직 안 끝났으므로
                                 # 진행률은 올리지 않는다
                                 deferred = i['count']
                                 continue
                             if i['data'] == 'drain_start':
                                 tqdm.write(
                                     f"앱 API로 지울 수 있는 건 다 지웠습니다. "
-                                    f"남은 {i['count']}건은 갤로그로 지웁니다 "
-                                    f"({i['delay']:.0f}초 간격, 봇체크가 뜰 수 있습니다)")
+                                    f"웹 삭제 대기: {i['count']}건 "
+                                    f"({i['delay']:.0f}초 간격, 봇체크 가능)")
                                 deferred = 0
                                 continue
                             if i['data'] == 'captcha_solving':
-                                tqdm.write('봇체크(캡차)가 감지되었습니다. 자동으로 풀어 봅니다...')
+                                tqdm.write('봇체크 감지: 자동 해제 시도...')
                                 continue
                             if i['data'] == 'captcha_solved':
                                 tqdm.write(
-                                    f"봇체크를 통과했습니다. "
-                                    f"(코드 {i.get('code')}, 이미지 {i.get('attempts')}장째)")
+                                    f"봇체크 통과: 코드 {i.get('code')}, "
+                                    f"이미지 {i.get('attempts')}장째")
                                 continue
                             if i['data'] == 'captcha':
-                                print(f'\n자동 해제에 실패했습니다. ({self._captcha_reason(i)})')
+                                print(f'\n자동 해제 실패: {self._captcha_reason(i)}')
                                 if i.get('where'):
-                                    print(f"  {i['where']} 에서 삭제를 눌러 코드를 입력해 주세요.")
-                                input('캡차 해제 후 엔터를 눌러주세요 >> ')
+                                    print(f"직접 해제 위치: {i['where']}")
+                                input('캡차 해제 후 Enter >> ')
                                 continue
                             if i['data'] == 'requeued':
                                 # 목록 끝으로 밀려 나중에 다시 시도한다
                                 # 아직 안 끝났으므로 진행률은 올리지 않는다
                                 requeued += 1
                                 tqdm.write(
-                                    f"나중에 다시 시도 ({i.get('del_no')}): {i.get('reason')} "
+                                    f"재시도 대기 ({i.get('del_no')}): {i.get('reason')} "
                                     f"[{i.get('attempt')}/{i.get('max_attempts')}]")
                                 continue
                             if i['data'] == 'failed':
@@ -762,29 +782,29 @@ class Console:
                         break
                     except KeyboardInterrupt:
                         if not self.askYes('\n[일시정지] 계속할까요?'):
-                            print('삭제가 취소되었습니다.')
+                            print('삭제 취소')
                             return
-                        print('삭제를 재개합니다...')
+                        print('삭제 재개...')
                         # 미뤄둔 항목을 목록에 되돌린 뒤 새로 시작해야 한다
                         # 먼저 닫지 않으면 되돌리는 시점이 GC에 달리게 된다
                         generator.close()
                         generator = self.cleaner.deletePosts(post_type)
         except KeyboardInterrupt:
-            print('\n삭제가 취소되었습니다.')
+            print('\n삭제 취소')
             return
 
         if requeued:
-            print(f'\n(일시적 거부로 {requeued}회 다시 시도했습니다)')
+            print(f'\n재시도: {requeued}회')
 
         # 실패만 잔뜩 났는데 "완료"라고 하면 지워진 줄 안다
         if deleted and failed:
-            print(f'\n{deleted}건 삭제, {failed}건 실패했습니다.')
+            print(f'\n삭제 완료: {deleted}건 / 실패: {failed}건')
         elif deleted:
-            print(f'\n{deleted}건을 삭제했습니다.')
+            print(f'\n삭제 완료: {deleted}건')
         elif failed:
-            print(f'\n{failed}건 모두 실패했습니다. 삭제된 글이 없습니다.')
+            print(f'\n삭제 실패: {failed}건 / 삭제: 0건')
         else:
-            print('\n삭제할 항목이 없었습니다.')
+            print('\n삭제 대상: 0건')
 
     def getCommand(self):
         print('dcinside cleaner')

@@ -161,8 +161,8 @@ class Cleaner:
         # (JSON 11KB / 30건 vs HTML 43KB / 20건)
         self.mobile = MobileGallog()
         self.use_mobile = True
-        # 갤로그로만 지울 수 있는 것들. 삭제 도중에 갤로그를 두드리면 봇게이트가
-        # 걸려 앱 API로 지울 수 있는 나머지까지 멈춘다. 모아뒀다 마지막에 지운다
+        # 앱 API로 지우지 못한 항목. 앱 처리 중간에 웹 요청을 섞으면 봇게이트가
+        # 걸릴 수 있으므로 앱 대상 전체를 먼저 처리한 뒤 웹 경로로 넘긴다
         self.deferred_list = []
         self.gallog_delay = GALLOG_DELAY
         # 목록을 거르는 조건. 전부 목록 응답만으로 판정하므로 요청이 늘지 않는다
@@ -544,32 +544,39 @@ class Cleaner:
                    allow_gallog: bool = True) -> Union[dict, bool]:
         """글/댓글 하나를 삭제한다
 
-        앱 API -> 모바일 갤로그 -> 데스크톱 갤로그 순으로 시도한다
+        app API -> mobile web -> desktop web 순으로 시도한다
         앱 API는 갤로그를 건드리지 않아 속도 제한에 걸리지 않는다
 
-        allow_gallog가 False면 갤로그로 넘어가야 하는 건을 'DEFER'로 돌려준다
-        호출부가 모아뒀다가 나중에 따로 지운다
+        allow_gallog가 False면 웹으로 넘어갈 항목을 'DEFER'로 돌려준다
+        호출부가 앱 대상 전체를 먼저 처리한 뒤 따로 지운다
+
+        시도한 경로와 결과는 entry에 기록한다. 삭제 루프가 기록을 이벤트로
+        내보내므로 콘솔에서 항목별 폴백 과정을 한 줄씩 확인할 수 있다
         """
         entry = post if isinstance(post, dict) else {'log_no': post, 'gallery': '', 'no': ''}
 
-        # 앱 API는 문자열 갤러리 ID를 요구한다. 모바일 목록엔 숫자 코드뿐이라 변환한다
-        if (not entry.get('gallery') and entry.get('gall_code')
+        # app API 준비 시간에는 숫자 갤러리 코드를 문자열 ID로 바꾸는 요청도
+        # 포함한다. 이 값이 있어야 항목별 소요 시간이 실제 체감과 맞는다
+        app_route_started = None
+        if (not solve_captcha and not entry.get('_gallog_only')
                 and self.isAppApiReady()):
-            entry['gallery'] = self.mobile.resolveGalleryId(
-                entry['gall_code'], entry.get('gall_type') or 'G')
+            app_route_started = time.time()
+            if not entry.get('gallery') and entry.get('gall_code'):
+                entry['gallery'] = self.mobile.resolveGalleryId(
+                    entry['gall_code'], entry.get('gall_type') or 'G')
 
         # 1) 앱 API. 모바일 목록이 글번호·댓글번호를 다 주므로 댓글도 여기서 지운다
         # 이미 앱 API가 거절해서 미뤄둔 건은 다시 물어볼 필요가 없다
         if (not solve_captcha and not entry.get('_gallog_only')
                 and self.isAppApiReady() and self._canUseAppApi(entry, post_type)):
             result = self._deleteViaAppApi(entry, post_type)
+            self._recordDeleteRoute(
+                entry, 'app API', result,
+                self.last_app_api_error or '사용 불가',
+                time.time() - app_route_started)
 
             # 삭제 성공
             if isinstance(result, dict) and not result:
-                return result
-
-            # 막힌 거라면 갤로그로 넘기지 않는다. 피하려던 부하가 그대로 돌아온다
-            if result == 'BLOCKED':
                 return result
 
             # result가 None이면 앱 API를 쓸 수 없다는 뜻이다
@@ -580,34 +587,104 @@ class Cleaner:
             # 앱 API는 원글 번호로 대상을 찾지만 갤로그 log-del은 로그 항목을
             # 지우므로 원글이 없어도 된다
             #
-            # 다만 지금 넘기지는 않는다. 삭제 한가운데서 log-del을 두드리면
-            # 2~3건 만에 봇게이트가 걸리고, 그러면 앱 API로 지울 수 있는
-            # 나머지까지 통째로 멈춘다. 미뤄뒀다 마지막에 몰아서 지운다
+            # 다만 지금 웹 요청을 섞지는 않는다. 앱 대상 전체를 먼저 처리하고
+            # 실패한 항목만 모아 mobile -> desktop 순으로 시도한다
             if not allow_gallog and entry.get('log_no'):
                 return 'DEFER'
 
-            if self.use_mobile and entry.get('log_no'):
-                fallback = self._deleteViaMobileGallog(entry['log_no'])
-                if fallback is not None:
-                    return fallback
-            if result is None:
-                return {'result': 'fail', 'msg': self.last_app_api_error or '앱 API를 쓸 수 없습니다.'}
-            return result
-
-        # 앱 API로는 애초에 못 지우는 항목(갤러리 ID나 댓글번호가 없는 것)이다
-        # 이것도 갤로그 몫이라 같이 미뤄둔다. 앱 API가 아예 없으면 미룰 이유가
-        # 없다 -- 어차피 전부 갤로그로 가므로 순서만 바뀐다
-        if not allow_gallog and self.isAppApiReady() and entry.get('log_no'):
-            return 'DEFER'
-
-        # 2) 모바일 갤로그. log_no 하나로 글·댓글을 모두 처리한다
-        if self.use_mobile and not solve_captcha and entry.get('log_no'):
-            result = self._deleteViaMobileGallog(entry['log_no'])
-            if result is not None:
+            # allow_gallog=True인 단계라면 아래의 모바일 -> 데스크톱 순서로
+            # 그대로 내려간다. BLOCKED도 여기서 바로 반환하면 앱 API에서
+            # 대기만 반복하고, 정상인 웹 삭제 경로를 전혀 시도하지 못한다
+            if not entry.get('log_no'):
+                if result is None:
+                    return {
+                        'result': 'fail',
+                        'msg': self.last_app_api_error or '앱 API를 쓸 수 없습니다.'
+                    }
                 return result
 
-        # 3) 데스크톱 갤로그. 캡차를 처리할 수 있는 유일한 경로다
-        return self._deleteViaGallog(entry.get('log_no', ''), post_type, solve_captcha)
+        # 앱 API에 필요한 갤러리 ID나 댓글번호가 없는 항목도 웹 처리로 미룬다
+        # 앱 API가 준비되지 않았다면 처음부터 웹 경로를 사용하므로 미룰 필요가 없다
+        if not allow_gallog and self.isAppApiReady() and entry.get('log_no'):
+            reason = (
+                '갤러리/글 번호 없음'
+                if not entry.get('gallery') or not entry.get('no')
+                else '댓글 번호 없음')
+            self._recordDeleteRouteSkipped(
+                entry, 'app API', reason,
+                time.time() - app_route_started
+                if app_route_started is not None else None)
+            return 'DEFER'
+
+        # 2) mobile web. log_no 하나로 글·댓글을 모두 처리한다
+        if self.use_mobile and not solve_captcha and entry.get('log_no'):
+            route_started = time.time()
+            result = self._deleteViaMobileGallog(entry['log_no'])
+            self._recordDeleteRoute(
+                entry, 'mobile web', result, '사용 불가',
+                time.time() - route_started)
+            if isinstance(result, dict) and not result:
+                return result
+            # 모바일의 속도 제한·봇체크·항목별 실패를 포함해 삭제가 안 됐으면
+            # 데스크톱을 마지막 경로로 시도한다. 모바일 신호를 바로 반환하면
+            # 상위 재시도 루프가 같은 모바일 경로에만 계속 머문다
+
+        # 3) desktop web. 앞선 경로가 무엇 때문에 실패했든 마지막으로 시도한다
+        route_started = time.time()
+        result = self._deleteViaGallog(
+            entry.get('log_no', ''), post_type, solve_captcha)
+        self._recordDeleteRoute(
+            entry, 'desktop web', result, '사용 불가',
+            time.time() - route_started)
+        return result
+
+    @staticmethod
+    def _deleteRouteReason(result, fallback: str = '') -> str:
+        """삭제 경로 실패 사유를 콘솔에 표시할 짧은 문자열로 정리한다"""
+        if result is None:
+            return fallback or '사용 불가'
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            return str(
+                result.get('msg') or result.get('cause') or
+                result.get('result') or fallback or '실패')
+        return str(result)
+
+    def _recordDeleteRoute(self, entry: dict, route: str, result,
+                           fallback: str = '', elapsed: float = None) -> None:
+        """항목별 삭제 경로 기록. 내부 키라 갤로그 요청 데이터에는 들어가지 않는다"""
+        if not isinstance(entry, dict):
+            return
+        ok = isinstance(result, dict) and not result
+        step = {'route': route, 'ok': ok}
+        if not ok:
+            step['reason'] = self._deleteRouteReason(result, fallback)
+        if elapsed is not None:
+            step['elapsed'] = round(elapsed, 1)
+        entry.setdefault('_delete_route', []).append(step)
+
+    @staticmethod
+    def _recordDeleteRouteSkipped(entry: dict, route: str, reason: str,
+                                  elapsed: float = None) -> None:
+        """경로를 호출할 조건이 부족한 경우를 실패와 구분해 기록한다"""
+        if not isinstance(entry, dict):
+            return
+        step = {'route': route, 'skipped': True, 'reason': reason}
+        if elapsed is not None:
+            step['elapsed'] = round(elapsed, 1)
+        entry.setdefault('_delete_route', []).append(step)
+
+    @staticmethod
+    def _takeDeleteRoute(entry: dict) -> list:
+        """아직 콘솔에 보내지 않은 경로 기록만 꺼낸다"""
+        if not isinstance(entry, dict):
+            return []
+        steps = entry.get('_delete_route') or []
+        cursor = entry.get('_delete_route_cursor', 0)
+        pending = steps[cursor:]
+        entry['_delete_route_cursor'] = len(steps)
+        return pending
 
     @staticmethod
     def _canUseAppApi(entry: dict, post_type: str) -> bool:
@@ -622,8 +699,8 @@ class Cleaner:
     def _deleteViaAppApi(self, entry: dict, post_type: str):
         """앱 API로 글/댓글을 삭제한다
 
-        쓸 수 없으면 None을 돌려주어 호출부가 갤로그로 넘기게 한다
-        그 외에는 갤로그 경로와 같은 형태로 맞춰 돌려준다
+        쓸 수 없으면 None을 돌려주어 호출부가 웹 경로로 넘기게 한다
+        그 외에는 공통 삭제 결과 형태로 맞춰 돌려준다
         """
         if post_type == 'comment':
             def call():
@@ -647,8 +724,8 @@ class Cleaner:
             self.app_api = None
             return None
         except (AppApiError, requests.RequestException) as e:
-            # 이번 건만 갤로그로 넘긴다
-            # 계속 실패하는데도 매번 넘기면 갤로그 부하가 조용히 원래대로 돌아온다
+            # 이번 항목은 웹 경로로 넘긴다. 연속 실패하면 앱 API 사용을 중단해
+            # 이후 항목이 불필요하게 같은 실패를 반복하지 않게 한다
             self._app_api_failures += 1
             self.last_app_api_error = f'{type(e).__name__}: {e}'
             if self._app_api_failures >= self.app_api_failure_limit:
@@ -662,7 +739,7 @@ class Cleaner:
         return self._appApiResult(result)
 
     def _appApiResult(self, result: dict):
-        """앱 API 응답을 갤로그 경로와 같은 형태로 맞춘다"""
+        """앱 API 응답을 공통 삭제 결과 형태로 맞춘다"""
         if result['ok']:
             return {}
 
@@ -697,15 +774,17 @@ class Cleaner:
         for attempt in range(2):
             try:
                 result = self.mobile.delete(self.user_id, log_no)
-            except Exception:
-                return None
+            except Exception as e:
+                return {'result': 'fail', 'msg': f'{type(e).__name__}: {e}'}
 
             if result['ok']:
                 return {}
             if result.get('captcha'):
                 return 'CAPTCHA'
             if result['cause'] in ('BLOCKED', 'THROTTLED') or result.get('transient'):
-                return 'BLOCKED'
+                # 상위에서 desktop web으로 폴백하므로 실제 mobile 실패 사유를
+                # 유지한다. 그래야 경로 로그에서 429와 빈 응답을 구분할 수 있다
+                return {'result': 'fail', 'msg': result['cause']}
 
             # 토큰 만료일 수 있으니 갱신해 한 번 더
             if attempt == 0:
@@ -968,14 +1047,15 @@ class Cleaner:
     def _deletePostsInner(self, post_type: str):
         solve_captcha = False
         self.deferred_list = []
-        # 갤로그 몫을 몰아 지우는 단계인지. 이때만 갤로그를 두드린다
+        # 앱 API 실패 항목을 웹으로 처리하는 단계인지. 앱 대상 전체를 먼저 훑고
+        # 이 단계에서만 mobile -> desktop 순서로 요청한다
         draining = False
 
         while True:
             if not self.post_list:
                 if draining or not self.deferred_list:
                     return
-                # 앱 API로 지울 수 있는 건 다 지웠다. 이제 갤로그 차례다
+                # 앱 대상 처리가 끝났다. 실패 항목을 웹 경로로 넘긴다
                 # 여기부터는 간격을 늘린다. log-del이 훨씬 예민하다
                 draining = True
                 self.post_list = self.deferred_list
@@ -996,9 +1076,21 @@ class Cleaner:
                                    allow_gallog=draining)
             delay = time.time() - a
 
+            # deletePost 안에서 실제로 시도한 경로를 즉시 알린다. DEFER이면
+            # 앱 실패만 먼저 표시되고, mobile/desktop 결과는 웹 처리 때 표시된다
+            route_steps = self._takeDeleteRoute(entry)
+            if route_steps:
+                yield {
+                    'status': False,
+                    'data': 'delete_route',
+                    'del_no': post_no,
+                    'steps': route_steps,
+                    'deferred': data == 'DEFER',
+                }
+
             if data == 'DEFER':
-                # 갤로그로만 되는 건이다. 지금 넘기면 봇게이트가 걸려
-                # 앱 API로 지울 수 있는 나머지까지 멈춘다
+                # 앱 API에서 실패한 항목이다. 지금 웹 요청을 섞지 않고
+                # 앱 대상 전체를 먼저 처리한 뒤 웹 단계로 넘긴다
                 self.post_list.pop(0)
                 # 2단계에서 앱 API를 다시 물어볼 필요가 없다는 표시
                 if isinstance(entry, dict):
@@ -1019,10 +1111,8 @@ class Cleaner:
                 continue
 
             if data == 'BLOCKED':
-                # 봇체크도 여기로 들어온다. 앱 API는 게이트에 걸리면 빈 본문이나
-                # "잠시 후 다시 이용"을 돌려주는데 둘 다 BLOCKED로 뭉뚱그려져
-                # 속도 제한으로 보고됐다. 기다려도 풀리지 않으니 7분 반을 버린 뒤
-                # IP 차단으로 잘못 끝난다. 기다리기 전에 게이트부터 확인한다
+                # desktop web까지 막혔을 때만 여기로 온다. mobile web 쪽에
+                # 봇체크가 걸린 상태일 수 있으므로 대기 전에 먼저 확인한다
                 if self.use_mobile and self.mobile.hasCaptcha(self.user_id):
                     yield from self._resolveCaptcha()
                     continue
@@ -1042,6 +1132,15 @@ class Cleaner:
                     time.sleep(wait)
                     data = self.deletePost(entry, post_type, solve_captcha,
                                            allow_gallog=draining)
+                    route_steps = self._takeDeleteRoute(entry)
+                    if route_steps:
+                        yield {
+                            'status': False,
+                            'data': 'delete_route',
+                            'del_no': post_no,
+                            'steps': route_steps,
+                            'deferred': data == 'DEFER',
+                        }
                     if data != 'BLOCKED':
                         recovered = True
                         yield {
