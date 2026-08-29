@@ -31,9 +31,9 @@ CAPTCHA_IMAGE_FALLBACK = '/captcha/code?id=log_del_botchk'
 
 # ddddocr 출력이 이 모양일 때만 제출한다
 # 이 캡차는 한글이 섞여 나오는데 ddddocr charset엔 한글이 사실상 없어서
-# 한글 이미지는 한자로 뭉개진다. 그 성질을 거꾸로 써서 판별에 쓴다
-# (출력에 CJK가 섞였다 = 읽을 수 없는 이미지다 -> 새로 뽑는다)
-ALNUM_ONLY = re.compile(r'^[a-z0-9]{4,8}$')
+# 한글 이미지가 대체로 한자로 뭉개진다. 인식 결과가 한글이면 제출해 보고,
+# 한자가 섞이면 제출하지 않고 새 이미지를 받는다
+SUBMITTABLE_CODE = re.compile(r'^[a-z0-9가-힣]{4,8}$')
 
 # 같은 이미지가 이만큼 연속으로 오면 새로고침해도 코드가 재발급되지 않는 것
 STATIC_IMAGE_LIMIT = 4
@@ -329,19 +329,19 @@ class MobileGallog:
             return {'ok': False, 'cause': str(payload.get('cause') or '코드가 틀렸습니다.')}
         return {'ok': True, 'cause': ''}
 
-    def solveCaptcha(self, user_id: str, ocr, tries: int = 120,
+    def solveCaptcha(self, user_id: str, ocr, tries: int = 300,
                      interval: float = 0.4, notify=None, dump=None) -> dict:
         """봇체크 캡차를 자동으로 푼다
 
-        이 캡차는 한글·영문·숫자가 섞여 나오고 한글은 ddddocr로 못 읽는다
-        그래서 푸는 게 아니라 고른다 -- 영문·숫자만 나올 때까지 새로 뽑고
-        그때만 제출한다. 한글이 섞이면 ddddocr 출력에 한자가 끼므로 걸러진다
+        한글·영문·숫자로 인식된 4~8자는 제출한다. 한자가 섞인 결과는
+        제출하지 않고 새 이미지를 받으며, 제출한 코드가 틀려도 서버가
+        코드를 갱신하므로 새 폼과 이미지를 받아 계속한다
 
         돌려주는 값의 reason
           'solved'        풀렸음
           'no_captcha'    게이트가 없음
           'static_image'  새로고침해도 같은 이미지. 코드가 재발급되지 않는다
-          'exhausted'     tries 안에 영문·숫자 이미지를 못 뽑았음
+          'exhausted'     tries 안에 자동으로 풀지 못했음
           그 외            서버 거절 사유
         """
         # 이미지 요청의 Referer에 쓴다. 목록을 안 거치고 바로 올 수도 있다
@@ -379,8 +379,8 @@ class MobileGallog:
             if notify:
                 notify(attempt, tries, text)
 
-            # 한글 이미지는 한자로 뭉개져 여기서 걸린다. 다시 뽑는다
-            if not ALNUM_ONLY.match(text):
+            # 한자가 섞이거나 허용 문자·길이를 벗어나면 제출하지 않고 다시 뽑는다
+            if not SUBMITTABLE_CODE.match(text):
                 time.sleep(interval)
                 continue
 

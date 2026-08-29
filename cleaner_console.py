@@ -132,7 +132,7 @@ class Console:
         reason = event.get('reason') or ''
         attempts = event.get('attempts') or 0
         if reason == 'exhausted':
-            return f'{attempts}장을 뽑는 동안 영문·숫자만 있는 캡차가 안 나왔습니다'
+            return f'{attempts}장을 확인했지만 자동으로 풀지 못했습니다'
         if reason == 'static_image':
             return '새로고침해도 같은 이미지가 옵니다. 코드가 다시 발급되지 않습니다'
         if reason == 'no_captcha':
@@ -655,11 +655,17 @@ class Console:
             list_unavailable = False
             for i in self.cleaner.aggregatePosts(gno, post_type):
                 if not i['status'] and i['data'] == 'list_fallback':
+                    route_names = {
+                        'mobile web': '모바일 웹',
+                        'desktop web': 'PC 웹',
+                    }
                     print(
-                        f"* 목록 경로 전환: {i.get('from')} → {i.get('to')}")
+                        '* 목록 경로 전환: '
+                        f"{route_names.get(i.get('from'), i.get('from'))} → "
+                        f"{route_names.get(i.get('to'), i.get('to'))}")
                     continue
                 if not i['status'] and i['data'] == 'filter_unavailable':
-                    print('* 필터 미지원: desktop 목록에 작성일·본문 없음. 조건 없이 진행')
+                    print('* 필터 미지원: PC 웹 목록에 작성일·본문 없음. 조건 없이 진행')
                     continue
                 if not i['status'] and i['data'] == 'ipblocked':
                     # 첫 페이지뿐 아니라 중간 페이지 실패도 partial 목록을
@@ -706,27 +712,42 @@ class Console:
         deferred = 0
         route_success = {
             '앱 API': 0,
-            'mobile': 0,
-            'desktop': 0,
+            '모바일 웹': 0,
+            'PC 웹': 0,
         }
         route_labels = {
             'app API': '앱 API',
             'app API 재시도': '앱 API 재시도',
-            'mobile web': 'mobile',
-            'desktop web': 'desktop',
+            'mobile web': '모바일 웹',
+            'desktop web': 'PC 웹',
         }
+        pc_web_announced = False
         try:
             # tqdm 기본값은 1초/건을 경계로 it/s와 s/it를 바꾼다
             # 삭제 중 단위가 뒤집히지 않도록 항상 it/s로 표시한다
             delete_bar_format = (
                 '{desc}: {percentage:3.0f}%|{bar}| '
                 '{n_fmt}/{total_fmt} '
-                '[{elapsed}<{remaining}, {rate_noinv_fmt}]')
+                '[{elapsed}<{remaining}, {rate_noinv_fmt}]{postfix}')
             with tqdm(
                     total=total,
                     desc=f'{type_kor} 삭제 [준비]',
                     bar_format=delete_bar_format) as pbar:
-                generator = self.cleaner.deletePosts(post_type)
+                pbar.postfix = ''
+
+                def show_captcha_text(attempt, tries, text):
+                    shown = (text.replace('\r', r'\r').replace('\n', r'\n')
+                             or '[인식 없음]')
+                    pbar.set_postfix_str(
+                        f'OCR {attempt}/{tries}: {shown}', refresh=True)
+
+                def clear_captcha_text():
+                    if pbar.postfix:
+                        pbar.postfix = ''
+                        pbar.refresh()
+
+                generator = self.cleaner.deletePosts(
+                    post_type, captcha_notify=show_captcha_text)
                 while True:
                     try:
                         i = next(generator)
@@ -750,6 +771,17 @@ class Console:
                                 attempted = [
                                     step for step in route_steps
                                     if not step.get('skipped')]
+                                mobile_failed = any(
+                                    step.get('route') == 'mobile web'
+                                    and not step.get('ok')
+                                    for step in attempted)
+                                pc_web_attempted = any(
+                                    step.get('route') == 'desktop web'
+                                    for step in attempted)
+                                if (mobile_failed and pc_web_attempted
+                                        and not pc_web_announced):
+                                    tqdm.write('모바일 웹 실패: PC 웹으로 전환')
+                                    pc_web_announced = True
                                 if attempted:
                                     route = attempted[-1].get('route')
                                     label = route_labels.get(route, route)
@@ -776,18 +808,20 @@ class Console:
                                 continue
                             if i['data'] == 'drain_start':
                                 pbar.set_description(
-                                    f'{type_kor} 삭제 [mobile]')
+                                    f'{type_kor} 삭제 [모바일 웹]')
                                 deferred = 0
                                 continue
                             if i['data'] == 'captcha_solving':
                                 tqdm.write('봇체크 감지: 자동 해제 시도...')
                                 continue
                             if i['data'] == 'captcha_solved':
+                                clear_captcha_text()
                                 tqdm.write(
                                     f"봇체크 통과: 코드 {i.get('code')}, "
                                     f"이미지 {i.get('attempts')}장째")
                                 continue
                             if i['data'] == 'captcha':
+                                clear_captcha_text()
                                 print(f'\n자동 해제 실패: {self._captcha_reason(i)}')
                                 if i.get('where'):
                                     print(f"직접 해제 위치: {i['where']}")
@@ -812,6 +846,7 @@ class Console:
                     except StopIteration:
                         break
                     except KeyboardInterrupt:
+                        clear_captcha_text()
                         if not self.askYes('\n[일시정지] 계속할까요?'):
                             print('삭제 취소')
                             return
@@ -819,7 +854,8 @@ class Console:
                         # 미뤄둔 항목을 목록에 되돌린 뒤 새로 시작해야 한다
                         # 먼저 닫지 않으면 되돌리는 시점이 GC에 달리게 된다
                         generator.close()
-                        generator = self.cleaner.deletePosts(post_type)
+                        generator = self.cleaner.deletePosts(
+                            post_type, captcha_notify=show_captcha_text)
         except KeyboardInterrupt:
             print('\n삭제 취소')
             return

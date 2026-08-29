@@ -639,10 +639,12 @@ class Cleaner:
                 time.time() - route_started)
             if isinstance(result, dict) and not result:
                 return result
-            # 봇체크는 기다리거나 다른 경로로 우회할 문제가 아니다. 명시적인
-            # 캡차 신호를 desktop 결과로 덮으면 상위에서 차단으로 오판한다
+            # 삭제 응답의 "잠시 후 다시 이용" 문구만으로는 실제 봇체크와
+            # 일시적인 mobile 거절을 구분할 수 없음. 페이지에 캡차 요소가
+            # 있을 때만 해제하고, 없거나 확인할 수 없으면 desktop으로 넘김
             if result == 'CAPTCHA':
-                return result
+                if self.mobile.hasCaptcha(self.user_id):
+                    return result
             # 그 밖의 실패는 desktop을 마지막 경로로 시도한다
 
         # 3) desktop web. 앞선 경로가 무엇 때문에 실패했든 마지막으로 시도한다
@@ -866,12 +868,11 @@ class Cleaner:
         except OSError:
             pass
 
-    def solveCaptchaAuto(self, tries: int = 120, notify=None) -> dict:
+    def solveCaptchaAuto(self, tries: int = 300, notify=None) -> dict:
         """모바일 갤로그 봇체크를 ddddocr로 풀어 본다
 
-        이 캡차는 한글이 섞여 나오는데 ddddocr charset엔 한글이 없다시피 해서
-        한글 이미지는 한자로 뭉개진다. 그래서 읽으려 들지 않고 고른다 --
-        영문·숫자만 나올 때까지 새로 뽑고 그때만 제출한다
+        한글·영문·숫자로 인식된 결과는 제출한다. 한자가 섞이면 제출하지 않고
+        새 이미지를 받으며, 제출한 코드가 틀리면 서버 검증 실패 후 다시 시도한다
 
         실패해도 예외를 올리지 않는다. 사람이 직접 푸는 길은 그대로 남는다
         """
@@ -893,10 +894,10 @@ class Cleaner:
         except Exception as e:
             return {'solved': False, 'reason': f'{type(e).__name__}: {e}'}
 
-    def _resolveCaptcha(self):
+    def _resolveCaptcha(self, notify=None):
         """봇체크를 자동으로 풀어 보고, 안 되면 사람에게 넘긴다"""
         yield {'status': False, 'data': 'captcha_solving'}
-        result = self.solveCaptchaAuto()
+        result = self.solveCaptchaAuto(notify=notify)
         if result.get('solved'):
             yield {
                 'status': False,
@@ -1047,20 +1048,20 @@ class Cleaner:
         else:
             yield {'status': False, 'data': 'claim_failed', 'reason': result['cause']}
 
-    def deletePosts(self, post_type: str) -> Union[str, list]:
+    def deletePosts(self, post_type: str, captcha_notify=None) -> Union[str, list]:
         """글/댓글을 순서대로 지운다
 
         중단되더라도 미뤄둔 항목은 목록으로 되돌린다
         안 그러면 다음 실행이 그 항목들을 아예 모르게 된다
         """
         try:
-            yield from self._deletePostsInner(post_type)
+            yield from self._deletePostsInner(post_type, captcha_notify=captcha_notify)
         finally:
             if self.deferred_list:
                 self.post_list.extend(self.deferred_list)
                 self.deferred_list = []
 
-    def _deletePostsInner(self, post_type: str):
+    def _deletePostsInner(self, post_type: str, captcha_notify=None):
         solve_captcha = False
         self.deferred_list = []
         # 앱 API 실패 항목을 웹으로 처리하는 단계인지. 앱 대상 전체를 먼저 훑고
@@ -1115,7 +1116,7 @@ class Cleaner:
                 }
 
             if app_captcha:
-                yield from self._resolveCaptcha()
+                yield from self._resolveCaptcha(notify=captcha_notify)
                 continue
 
             if data == 'APP_RETRY':
@@ -1150,14 +1151,14 @@ class Cleaner:
             if data == 'CAPTCHA':
                 # 갤로그 봇 확인. 기다려서는 풀리지 않으니 풀고 나서 다시 한다
                 # 넘어가면 지워지지 않은 항목이 목록에서 빠지므로 같은 항목을 다시 시도한다
-                yield from self._resolveCaptcha()
+                yield from self._resolveCaptcha(notify=captcha_notify)
                 continue
 
             if data == 'BLOCKED':
                 # desktop web까지 막혔을 때만 여기로 온다. mobile web 쪽에
                 # 봇체크가 걸린 상태일 수 있으므로 대기 전에 먼저 확인한다
                 if self.use_mobile and self.mobile.hasCaptcha(self.user_id):
-                    yield from self._resolveCaptcha()
+                    yield from self._resolveCaptcha(notify=captcha_notify)
                     continue
 
                 # 속도 제한. 기다렸다가 다시 시도한다
@@ -1196,7 +1197,7 @@ class Cleaner:
                     # 기다리는 사이에 게이트가 붙었을 수도 있다
                     # 확인하지 않으면 풀 수 있는 상태를 IP 차단으로 끝낸다
                     if self.use_mobile and self.mobile.hasCaptcha(self.user_id):
-                        yield from self._resolveCaptcha()
+                        yield from self._resolveCaptcha(notify=captcha_notify)
                         continue
                     yield {
                         'status': False,
