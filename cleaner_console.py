@@ -9,6 +9,13 @@ import re
 import os
 import sys
 
+# input()이 한글 백스페이스를 글자 단위로 지우게 함
+# 없으면 tty가 바이트 단위로 지워 UTF-8이 깨질 수 있음 (Windows엔 없음)
+try:
+    import readline  # noqa: F401
+except ImportError:
+    pass
+
 class Console:
     p_type = {'-p': 'posting', '-c': 'comment'}
     ACCOUNTS_FILE = 'dcinside-cleaner-accounts.json'
@@ -460,6 +467,15 @@ class Console:
             print('로그아웃되었습니다.')
             self.show_account_list()
 
+    @staticmethod
+    def readText(prompt: str) -> str:
+        """한글 입력용. 터미널이 UTF-8이 아닌 바이트를 보내면 다시 입력받는다"""
+        while True:
+            try:
+                return input(prompt).strip()
+            except UnicodeDecodeError:
+                print('입력을 읽지 못했습니다. 터미널 인코딩이 UTF-8인지 확인하고 다시 입력해 주세요.')
+
     def handleDaewangcon(self, cmd):
         """대왕콘 받기
 
@@ -483,8 +499,8 @@ class Console:
         print('* 실제로 글이 올라갑니다. 작성한 글은 자동으로 지우지 않습니다.')
         print('* 글쓰기 제한 때문에 5분 안팎 걸립니다.')
 
-        subject = input('글 제목/내용 (엔터: 기본값) >> ').strip()
-        comment = input('댓글 내용 (엔터: 제목과 동일) >> ').strip()
+        subject = self.readText('글 제목/내용 (엔터: 기본값) >> ')
+        comment = self.readText('댓글 내용 (엔터: 제목과 동일) >> ')
 
         try:
             with tqdm(total=dc.DAEWANGCON_POSTS + dc.DAEWANGCON_COMMENTS) as pbar:
