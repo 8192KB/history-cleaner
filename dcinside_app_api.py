@@ -26,12 +26,13 @@ import time
 
 import requests
 
-# 앱 5.0.9 기준 값. vCode를 올리지 않아도 서버가 받아줌 (2026-08 확인)
+# 앱 5.3.20 기준 값. 2026-10-23에 강제 업데이트(5.3.20)가 걸림
+# 2026-08에는 vCode를 올리지 않아도 받아줬음
 # vName은 app_check가 준 값을 되돌려주는 것이라 고정하지 않음
 # signature는 APK 서명 해시라 앱 버전이 올라가도 그대로임
 APP_PACKAGE = 'com.dcinside.app.android'
-APP_VERSION_CODE = '100115'
-APP_VERSION_NAME = '5.0.9'
+APP_VERSION_CODE = '100190'
+APP_VERSION_NAME = '5.3.20'
 APP_SIGNATURE = '5rJxRKJ2YLHgBgj6RdMZBl2X0KcftUuMoXVug0bsKd0='
 ANDROID_OS_VERSION = '35'
 ANDROID_TARGET_VERSION = '35'
@@ -48,7 +49,6 @@ GCM_INFO = 'Q2U3ar09NyAToOhBO1boBVw1nzmBjxg'
 FCM_CLIENT_VERSION = 'fcm-24.0.3'
 
 APP_USER_AGENT = 'dcinside.app'
-MOBILE_APP_USER_AGENT = 'com.dcinside.mobileapp'
 
 CHECKIN_URL = 'https://android.clients.google.com/checkin'
 INSTALLATIONS_URL = f'https://firebaseinstallations.googleapis.com/v1/projects/{FIREBASE_PROJECT}/installations'
@@ -486,15 +486,15 @@ class AppApi:
 
         res = self.session.post(
             LOGIN_URL,
-            files={
-                'client_token': (None, self.client_token),
-                'user_id': (None, user_id),
-                'user_pw': (None, user_pw),
-                'mode': (None, mode),
+            data={
+                'client_token': self.client_token,
+                'user_id': user_id,
+                'user_pw': user_pw,
+                'mode': mode,
             },
             headers={
-                'User-Agent': MOBILE_APP_USER_AGENT,
-                'Referer': 'https://www.dcinside.com',
+                'User-Agent': APP_USER_AGENT,
+                'Referer': 'http://www.dcinside.com',
             },
             timeout=TIMEOUT)
         res.raise_for_status()

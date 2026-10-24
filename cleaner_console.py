@@ -460,17 +460,10 @@ class Console:
             print('로그아웃되었습니다.')
             self.show_account_list()
 
-    @staticmethod
-    def askYes(question: str) -> bool:
-        """예/아니오. 그냥 엔터를 치면 예로 본다"""
-        answer = input(f'{question} (Y/n) >> ').strip().lower()
-        return answer in ('', 'y', 'yes')
-
     def handleDaewangcon(self, cmd):
         """대왕콘 받기
 
-        이벤트 갤러리에 글 10개·댓글 20개를 쓴다. 실제로 글이 올라가므로
-        시작 전에 한 번 확인을 받는다
+        이벤트 갤러리에 글 10개·댓글 20개를 쓴다
         """
         if not self.login_flag:
             print('먼저 로그인해 주세요.')
@@ -489,9 +482,6 @@ class Console:
               f'{dc.DAEWANGCON_POST_NO}번 글에 댓글 {dc.DAEWANGCON_COMMENTS}개를 작성합니다.')
         print('* 실제로 글이 올라갑니다. 작성한 글은 자동으로 지우지 않습니다.')
         print('* 글쓰기 제한 때문에 5분 안팎 걸립니다.')
-        if not self.askYes('진행할까요?'):
-            print('취소했습니다.')
-            return
 
         subject = input('글 제목/내용 (엔터: 기본값) >> ').strip()
         comment = input('댓글 내용 (엔터: 제목과 동일) >> ').strip()
@@ -704,7 +694,7 @@ class Console:
             print('\n작업 취소')
             return
 
-        print('삭제 중... (일시정지: Ctrl+C)')
+        print('삭제 중... (취소: Ctrl+C)')
         total = len(self.cleaner.post_list)
         deleted = 0
         failed = 0
@@ -847,15 +837,8 @@ class Console:
                         break
                     except KeyboardInterrupt:
                         clear_captcha_text()
-                        if not self.askYes('\n[일시정지] 계속할까요?'):
-                            print('삭제 취소')
-                            return
-                        print('삭제 재개...')
-                        # 미뤄둔 항목을 목록에 되돌린 뒤 새로 시작해야 한다
-                        # 먼저 닫지 않으면 되돌리는 시점이 GC에 달리게 된다
-                        generator.close()
-                        generator = self.cleaner.deletePosts(
-                            post_type, captcha_notify=show_captcha_text)
+                        print('\n삭제 취소')
+                        return
         except KeyboardInterrupt:
             print('\n삭제 취소')
             return
