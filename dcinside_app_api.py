@@ -549,24 +549,19 @@ class AppApi:
         return result
 
     def _deleteArticleOnce(self, gallery_id: str, post_no: str) -> dict:
-        body = {
-            'id': (None, gallery_id),
-            'no': (None, str(post_no)),
-            'mode': (None, 'board_del'),
-            'app_id': (None, self.app_id),
-            'client_token': (None, self.client_token),
-            'confirm_id': (None, self.account['user_id']),
-            'user_id': (None, self.account['user_id']),
-            'board_id': (None, self.account['login_id']),
-        }
+        # 앱 5.3.20부터 mode가 board_del2로 바뀜. 예전 board_del 요청은
+        # "최신 버전으로 업데이트" 사유로 거절된다. confirm_id·board_id도 안 보냄
         res = self.session.post(
             ARTICLE_DELETE_URL,
-            files=body,
-            headers={
-                'User-Agent': APP_USER_AGENT,
-                'Referer': 'https://www.dcinside.com',
-                'Connection': 'Keep-Alive',
+            data={
+                'id': gallery_id,
+                'no': str(post_no),
+                'mode': 'board_del2',
+                'app_id': self.app_id,
+                'client_token': self.client_token,
+                'user_id': self.account['user_id'],
             },
+            headers={'User-Agent': APP_USER_AGENT},
             timeout=TIMEOUT)
         return self._parseDeleteResult(res)
 

@@ -728,6 +728,7 @@ class Console:
             'desktop web': 'PC 웹',
         }
         pc_web_announced = False
+        route_rejects = {}
         try:
             # tqdm 기본값은 1초/건을 경계로 it/s와 s/it를 바꾼다
             # 삭제 중 단위가 뒤집히지 않도록 항상 it/s로 표시한다
@@ -795,6 +796,17 @@ class Console:
                                         f'{type_kor} 삭제 [{label}]')
                                 for step in attempted:
                                     if not step.get('ok'):
+                                        label = route_labels.get(
+                                            step.get('route'), step.get('route'))
+                                        if label == '앱 API 재시도':
+                                            label = '앱 API'
+                                        key = (label, step.get('reason') or '사유 없음')
+                                        # 같은 사유가 수십 건 반복되므로 처음 한 번만 출력하고
+                                        # 나머지는 끝에 건수로 합침
+                                        if key not in route_rejects:
+                                            tqdm.write(
+                                                f'{label} 거절 ({i.get("del_no")}): {key[1]}')
+                                        route_rejects[key] = route_rejects.get(key, 0) + 1
                                         continue
                                     route = step.get('route')
                                     label = route_labels.get(route, route)
@@ -858,6 +870,12 @@ class Console:
         except KeyboardInterrupt:
             print('\n삭제 취소')
             return
+        finally:
+            # 취소·중단으로 빠져나갈 때도 지금까지의 거절 사유를 남김
+            if route_rejects:
+                print('\n거절 사유:')
+                for (label, reason), count in route_rejects.items():
+                    print(f'  {label}: {reason} ({count}건)')
 
         if requeued:
             print(f'\n재시도: {requeued}회')
